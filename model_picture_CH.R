@@ -7,43 +7,44 @@ library(gbm)
 library(tidyverse)
 library(kernlab)
 
-setwd("E:/1_wzy/corn/predict/data")
+# # Set working directory
+# setwd("your_filepath")
 
-
+# Import data
 res_band <- rio::import("data_CH_VIs.xlsx", sheet = 1)
 processed_data <- res_band
 
-
+# Data splitting
 set.seed(247)
 n <- nrow(processed_data)
 indices <- sample(1:n)  
-
-
 train_end <- floor(0.67 * n) 
 test_end <- floor(0.33 * n)  
 
-
+# Split into training and test sets
 data_train <- processed_data[indices[1:train_end], ] 
 data_test <- processed_data[indices[(train_end + 1):test_end], ]  
 
-
+# Unify factor levels for test set
 factor_cols <- names(processed_data)[sapply(processed_data, is.factor)] 
 for (col in factor_cols) {
   data_test[[col]] <- factor(data_test[[col]], levels = levels(data_train[[col]]))
 }
 
-
+# Data preprocessing: PCA
+# --------------------------------------------------
+# Extract features and target variable
 target <- "CH"
 features_train <- data_train %>% select(-all_of(target))
 features_test <- data_test %>% select(-all_of(target))
 
-
+# Convert factor features to dummy variables
 if (length(factor_cols) > 0) {
   dummy <- dummyVars(~., data = features_train)
   features_train_dummy <- predict(dummy, features_train)
   features_test_dummy <- predict(dummy, features_test)
   
-
+  # Align column names
   missing_cols <- setdiff(colnames(features_train_dummy), colnames(features_test_dummy))
   features_test_dummy <- cbind(
     features_test_dummy,
@@ -59,42 +60,43 @@ if (length(factor_cols) > 0) {
   features_test_dummy <- as.matrix(features_test)
 }
 
-
+# Perform PCA
 pca_model <- prcomp(features_train_dummy, center = TRUE, scale. = TRUE)
 
-
+# Determine number of principal components (cumulative variance >= 95%)
 cum_var <- cumsum(pca_model$sdev^2)/sum(pca_model$sdev^2)
 n_components <- which(cum_var >= 0.95)[1]
 if (is.na(n_components)) n_components <- length(pca_model$sdev)
 
-
+# Transform data and set column names
 train_pca <- as.data.frame(predict(pca_model, features_train_dummy)[, 1:n_components])
 test_pca <- as.data.frame(predict(pca_model, features_test_dummy)[, 1:n_components])
 colnames(train_pca) <- paste0("PC", 1:n_components)
 colnames(test_pca) <- paste0("PC", 1:n_components)
 
-
+# Reconstruct datasets
 data_train <- data.frame(CH = data_train[[target]], train_pca)
 data_test <- data.frame(CH = data_test[[target]], test_pca)
+# --------------------------------------------------
 
+# Define target variables
 targets <- c("CH")  
-
-
+# Define storage lists
 final_results <- list()
 estimate_results <- data.frame(Actual_CH = data_test$CH)
-models <- list()
+models <- list()  # New model storage list
 
-
+# Cross-validation setup
 ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
 
-
+# Model training and prediction
 for (target in targets) {
   formula <- as.formula(paste(target, "~ ."))
   
-
+  # Get current number of features
   n_features <- ncol(data_train) - 1
   
-
+  # Support Vector Machine Regression (SVM)
   tryCatch({
     svm_grid <- expand.grid(sigma = 10^seq(-3, 1, length = 5),
                             C = 10^seq(-1, 3, length = 5))
@@ -103,10 +105,10 @@ for (target in targets) {
     predict_svm_train <- predict(models$svm, data_train)
     predict_svm_test <- predict(models$svm, data_test)
   }, error = function(e) {
-    message("SVM 模型训练失败: ", e$message)
+    message("SVM model training failed: ", e$message)
   })
   
-
+  # Random Forest Regression (RF)
   tryCatch({
     rf_grid <- expand.grid(mtry = seq(1, n_features, by = 1))
     models$rf <- train(formula, data = data_train, method = "rf",
@@ -114,10 +116,10 @@ for (target in targets) {
     predict_rf_train <- predict(models$rf, data_train)
     predict_rf_test <- predict(models$rf, data_test)
   }, error = function(e) {
-    message("RF 模型训练失败: ", e$message)
+    message("RF model training failed: ", e$message)
   })
   
-
+  # Gaussian Process Regression (GSL)
   tryCatch({
     gsl_grid <- expand.grid(sigma = 10^seq(-3, 1, length = 5))
     models$gsl <- train(formula, data = data_train, method = "gaussprRadial",
@@ -125,10 +127,10 @@ for (target in targets) {
     predict_gsl_train <- predict(models$gsl, data_train)
     predict_gsl_test <- predict(models$gsl, data_test)
   }, error = function(e) {
-    message("GSL 模型训练失败: ", e$message)
+    message("GSL model training failed: ", e$message)
   })
   
-
+  # Partial Least Squares Regression (PLS)
   tryCatch({
     pls_grid <- expand.grid(ncomp = 1:min(10, n_features))
     models$pls <- train(formula, data = data_train, method = "pls",
@@ -136,10 +138,10 @@ for (target in targets) {
     predict_pls_train <- predict(models$pls, data_train)
     predict_pls_test <- predict(models$pls, data_test)
   }, error = function(e) {
-    message("PLS 模型训练失败: ", e$message)
+    message("PLS model training failed: ", e$message)
   })
   
-
+  # Neural Network (NN)
   tryCatch({
     nn_grid <- expand.grid(size = seq(5, 25, by = 5),
                            decay = 10^seq(-3, 0, length = 5))
@@ -149,10 +151,10 @@ for (target in targets) {
     predict_nn_train <- predict(models$nn, data_train)
     predict_nn_test <- predict(models$nn, data_test)
   }, error = function(e) {
-    message("NN 模型训练��败: ", e$message)
+    message("NN model training failed: ", e$message)
   })
   
-
+  # Evaluate model performance
   model_metrics <- data.frame(
     model = c("SVM", "RF", "GSL", "PLS", "NN"),
     R2_train = round(c(
@@ -199,10 +201,10 @@ for (target in targets) {
     ), 3)
   )
   
-
+  # Save evaluation results
   final_results[[target]] <- model_metrics
   
-
+  # Select best model (based on minimum test RMSE)
   best_model <- model_metrics$model[which.min(model_metrics$RMSE_test)]
   best_predictions <- switch(
     best_model,
@@ -218,9 +220,10 @@ for (target in targets) {
   }
 }
 
-
+# Full dataset prediction processing
+# --------------------------------------------------
+# Preprocess full dataset
 full_features <- processed_data %>% select(-all_of(target))
-
 if (length(factor_cols) > 0) {
   full_dummy <- predict(dummy, full_features)
   missing_cols <- setdiff(colnames(features_train_dummy), colnames(full_dummy))
@@ -236,14 +239,14 @@ if (length(factor_cols) > 0) {
   full_dummy <- as.matrix(full_features)
 }
 
-
+# PCA transformation for full dataset
 full_pca <- as.data.frame(predict(pca_model, full_dummy)[, 1:n_components])
 colnames(full_pca) <- paste0("PC", 1:n_components)
 full_data <- data.frame(CH = processed_data[[target]], full_pca)
 
+# Generate full dataset predictions
 model_order <- c("svm", "rf", "gsl", "pls", "nn")
 all_predictions <- data.frame(Actual_CH = full_data$CH)
-
 for (model_name in model_order) {
   if (!is.null(models[[model_name]])) {
     pred <- predict(models[[model_name]], newdata = full_data)
@@ -251,61 +254,62 @@ for (model_name in model_order) {
   }
 }
 
-
+# Output prediction results
 write.csv(all_predictions, 
-          "E:/1_wzy/corn/predict/output/拔节期-CH反演结果.csv", 
+          "E:/1_wzy/corn/predict/output/JointingStage-CH_InversionResults.csv", 
           row.names = FALSE)
+# --------------------------------------------------
 
+# Output evaluation results
 print(final_results)
-
-
+# Combine evaluation results
 final_results_combined <- do.call(rbind, final_results)
 write.csv(final_results_combined, 
-          file = "E:/1_wzy/corn/predict/output/拔节期-CH模型评估.csv", 
+          file = "E:/1_wzy/corn/predict/output/JointingStage-CH_ModelEvaluation.csv", 
           row.names = FALSE)
 
-
+# Generate prediction data (ensure model is trained correctly)
 if(exists("models") && !is.null(models$rf)){
   predict_rf_train <- predict(models$rf, newdata = data_train)
   predict_rf_test <- predict(models$rf, newdata = data_test)
 } else {
-  stop("随机森林模型未正确训练，请先运行模型训练代码")
+  stop("Random Forest model not trained correctly. Please run the model training code first.")
 }
 
-
+# Create plotting dataset
 plot_data <- rbind(
   data.frame(
     Actual = data_train$CH,
     Predicted = predict_rf_train,
-    Dataset = "训练集"
+    Dataset = "Training"
   ),
   data.frame(
     Actual = data_test$CH,
     Predicted = predict_rf_test,
-    Dataset = "测试集"
+    Dataset = "Testing"
   )
 )
 
-
+# Calculate all metrics
 r2_train <- caret::R2(predict_rf_train, data_train$CH)
 rmse_train <- caret::RMSE(predict_rf_train, data_train$CH)
 rmse_test <- caret::RMSE(predict_rf_test, data_test$CH)
 r2_test <- caret::R2(predict_rf_test, data_test$CH)
 
-
+# Generate strict 5-equal-part integer breakpoints
 min_val <- floor(min(plot_data$Actual, plot_data$Predicted))
 max_val <- ceiling(max(plot_data$Actual, plot_data$Predicted))
-n_breaks <- 5  # 5个分界点对应4个间隔
-interval <- ceiling((max_val - min_val) / (n_breaks - 1))  # 确保间隔为整数
+n_breaks <- 5  # 5 breakpoints correspond to 4 intervals
+interval <- ceiling((max_val - min_val) / (n_breaks - 1))  # Ensure interval is integer
 
-
+# Generate arithmetic sequence (may slightly expand axis range)
 breaks <- seq(
   from = min_val,
   by = interval,
   length.out = n_breaks
 )
 
-
+# Visualization implementation
 ggplot(plot_data, aes(x = Actual, y = Predicted, color = Dataset)) +
   geom_point(alpha = 0.7, size = 2.5, shape = 16) +
   geom_abline(
@@ -326,33 +330,29 @@ ggplot(plot_data, aes(x = Actual, y = Predicted, color = Dataset)) +
   ) +
   theme_bw(base_size = 12) +
   labs(
-    x = NULL,  # 禁用默认x标签
-    y = NULL,   # 禁用默认y标签
+    x = NULL,  # Disable default x label
+    y = NULL,   # Disable default y label
     title = "(a)"
   ) +
   theme(
     panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
     axis.text = element_text(size = 11, color = "black"),
-    axis.title = element_text(size = 12, face = "bold"),  # 加粗坐标轴名称
-    plot.title = element_text(hjust = 0.5, size = 12),    # 居中标题
+    axis.title = element_text(size = 12, face = "bold"),  # Bold axis names
+    plot.title = element_text(hjust = 0.5, size = 12),    # Center title
     legend.position = "none"
   ) +
-  scale_color_manual(values = c("训练集" = "#1f77b4", "测试集" = "#ff7f0e")) +
+  scale_color_manual(values = c("Training" = "#1f77b4", "Testing" = "#ff7f0e")) +
   
- 
-  
-
+  # Training set metrics annotation
   annotate("text", x = min_val + 0.5, y = max_val - 6,
            label = sprintf("● Training set  R² = %.2f, RMSE = %.2f (cm)", 
                            r2_train, rmse_train),
            hjust = 0, vjust = 0, color = "#1f77b4",
            size = 4, lineheight = 0.8) +
   
-
+  # Testing set metrics annotation
   annotate("text", x = min_val + 0.5, y = max_val - 12,
            label = sprintf("● Testing set  R² = %.2f, RMSE = %.2f (cm)", 
                            r2_test, rmse_test),
            hjust = 0, vjust = 0, color = "#ff7f0e",
            size = 4, lineheight = 0.8)
-
-
